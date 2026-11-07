@@ -274,7 +274,9 @@ export const createHttpMcpApp = async (
   config: HttpTransportConfig,
 ): Promise<express.Application> => {
   const app = express();
-  const serverUrl = getHttpServerUrl(config);
+  // Public HTTPS origin for OAuth resource metadata and audience checks on Railway.
+  // The listening interface remains config.host/config.port.
+  const serverUrl = (process.env.MCP_PUBLIC_URL?.trim().replace(/\/$/, '') || getHttpServerUrl(config));
   const ebayConfig = config.ebayConfig ?? getEbayConfig();
 
   app.use(
