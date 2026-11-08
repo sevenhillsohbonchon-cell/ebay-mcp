@@ -7,7 +7,7 @@ import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/
 import { isInitializeRequest, type Implementation } from '@modelcontextprotocol/sdk/types.js';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
-import { createBearerAuthMiddleware } from '@/auth/oauthMiddleware.js';
+import { createBearerAuthMiddleware, type AuthenticatedRequest } from '@/auth/oauthMiddleware.js';
 import { createMetadataRouter, getProtectedResourceMetadataUrl } from '@/auth/oauthMetadata.js';
 import { TokenVerifier } from '@/auth/tokenVerifier.js';
 import { getDefaultScopes, getEbayConfig } from '@/config/environment.js';
@@ -98,9 +98,10 @@ export const createHttpTransportConfigFromEnv = (env: NodeJS.ProcessEnv): HttpTr
     authServerUrl: env.OAUTH_AUTH_SERVER_URL ?? 'http://localhost:8080/realms/master',
     clientId: env.OAUTH_CLIENT_ID,
     clientSecret: env.OAUTH_CLIENT_SECRET,
-    requiredScopes: (env.OAUTH_REQUIRED_SCOPES || 'mcp:tools')
+    requiredScopes: (env.OAUTH_REQUIRED_SCOPES ?? 'mcp:tools')
       .split(',')
-      .map((scope) => scope.trim()),
+      .map((scope) => scope.trim())
+      .filter(Boolean),
     useIntrospection: env.OAUTH_USE_INTROSPECTION !== 'false',
   },
   authEnabled: env.OAUTH_ENABLED !== 'false',
@@ -312,6 +313,19 @@ export const createHttpMcpApp = async (
   });
 
   const authMiddleware = await createAuthMiddleware(config, serverUrl);
+  // One eBay seller refresh token is shared by this service. Authenticate with OAuth
+  // AND authorize an explicit Auth0 user subject before giving access to any tool.
+  const subjectAuthorization: RequestHandler = (request, response, next) => {
+    if (config.staticAuthToken || !config.authEnabled) { next(); return; }
+    const allowedSubjects = (process.env.MCP_ALLOWED_SUBJECTS ?? '')
+      .split(',').map((value) => value.trim()).filter(Boolean);
+    const verifiedSubject = (request as AuthenticatedRequest).auth?.subject;
+    if (!verifiedSubject || !allowedSubjects.includes(verifiedSubject)) {
+      response.status(403).json({ error: 'forbidden', error_description: 'MCP user not authorized' });
+      return;
+    }
+    next();
+  };
   const transports = new Map<string, StreamableHTTPServerTransport>();
 
   const mcpPostHandler = async (request: Request, response: Response): Promise<void> => {
@@ -367,9 +381,9 @@ export const createHttpMcpApp = async (
     await transport.handleRequest(request, response);
   };
 
-  const mcpMiddleware = authMiddleware ? [authMiddleware, mcpPostHandler] : [mcpPostHandler];
+  const mcpMiddleware = authMiddleware ? [authMiddleware, subjectAuthorization, mcpPostHandler] : [mcpPostHandler];
   const sessionMiddleware = authMiddleware
-    ? [authMiddleware, handleSessionRequest]
+    ? [authMiddleware, subjectAuthorization, handleSessionRequest]
     : [handleSessionRequest];
 
   app.post('/', ...mcpMiddleware);
