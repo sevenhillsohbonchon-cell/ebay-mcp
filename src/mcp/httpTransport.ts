@@ -106,7 +106,7 @@ export const createHttpTransportConfigFromEnv = (env: NodeJS.ProcessEnv): HttpTr
   authEnabled: env.OAUTH_ENABLED !== 'false',
   corsOrigins: parseCorsOrigins(env.MCP_CORS_ORIGINS),
   projectRoot: getProjectRoot(),
-  staticAuthToken: env.MCP_AUTH_TOKEN,
+  staticAuthToken: env.MCP_AUTH_MODE === 'oauth' ? undefined : env.MCP_AUTH_TOKEN,
 });
 
 /**
@@ -135,7 +135,7 @@ export const getHttpServerUrl = (config: Pick<HttpTransportConfig, 'host' | 'por
  * ```
  */
 export const getAuthServerMetadataUrl = (config: Pick<HttpTransportConfig, 'oauth'>): string => {
-  const baseUrl = config.oauth.authServerUrl;
+  const baseUrl = config.oauth.authServerUrl.replace(/\/+$/, '');
 
   if (baseUrl.includes('/realms/')) {
     return `${baseUrl}/.well-known/openid-configuration`;
@@ -293,7 +293,8 @@ export const createHttpMcpApp = async (
   app.use(
     createMetadataRouter({
       resourceServerUrl: serverUrl,
-      authServerMetadata: getAuthServerMetadataUrl(config),
+      // RFC 9728 requires the authorization server issuer, not its discovery document URL.
+      authServerMetadata: config.oauth.authServerUrl,
       scopesSupported: config.oauth.requiredScopes,
       resourceDocumentation: 'https://github.com/YosefHayim/ebay-mcp',
       resourceName: 'eBay API MCP Server',
